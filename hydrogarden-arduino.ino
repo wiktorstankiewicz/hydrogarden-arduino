@@ -3,9 +3,9 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
+#include <PubSubClient.h>
 #define NUMBER_OF_CIRCUITS 8
 #define TIMEOUT_MILLIS 300000
-
 
 struct GeneratedTask
 {
@@ -13,8 +13,15 @@ struct GeneratedTask
   bool mode; // true = on, false = off
 };
 
-const String API_URL = "http://localhost:30437" + "/api";
+
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+const String API_URL = "http://localhost:30437/api";
 String commandBuffer[10];
+
+const char* brokerUrl = "192.168.0.102";
+const u_int16_t brokerPort = 1883;
 
 int pinFromCircuitCode(int circuitCode)
 {
@@ -100,43 +107,41 @@ void printState()
   }
 }
 
-void confirmExecutionOfTask(int generatedTaskId)
-{
+void mqttCallback(const char* topic, byte* payload, unsigned int length) {
+  Serial.println("asdasd");
+  String payloadString(payload, length);
+  String topicString(topic);
 
-  HTTPClient http;
-  http.begin(API_URL + "/hydroponic/confirm-execution-of-task");
-  http.addHeader("Content-Type", "application/json");
-  http.POST(String(generatedTaskId));
-  http.end();
-}
+  JsonDocument doc;
 
-GeneratedTask *tryGettingTaskFromHttp()
-{
-  HTTPClient http;
-  StaticJsonDocument<1000> json;
-  http.begin(API_URL + "/hydroponic/get-task");
-  http.setTimeout(TIMEOUT_MILLIS);
-  int httpResponseCode = http.GET();
-  if (httpResponseCode == 200)
-  {
-    String payload = http.getString();
-    DeserializationError err = deserializeJson(json, payload);
-    if (err)
-    {
-      return 0;
+  deserializeJson(doc,payloadString);
+  const String commandName = doc["commandName"];
+  Serial.println(commandName);
+  if(commandName == "ChangeSingleCircuitStateRequest") {
+    int circuitCode = doc["circuitId"];
+    bool newState = doc["newState"];
+    Serial.println(circuitCode);
+    Serial.println(newState);
+
+    toggleCircuit(circuitCode, newState);
+    printState();
+
+  } else if(commandName == "ChangeMultipleCircuitStateRequest") {
+    JsonArray requests = doc["requests"];
+
+    for(JsonVariant request: requests){
+      int circuitCode = request["circuitId"];
+      bool newState = request["newState"];
+      Serial.println(circuitCode);
+      Serial.println(newState);
+
+      toggleCircuit(circuitCode, newState);
+      printState();
     }
-    int circuitCode = json["circuitCode"];
-    bool mode = json["mode"];
-    int generatedTaskId = json["generatedTaskId"];
-    confirmExecutionOfTask(generatedTaskId);
-    return new GeneratedTask{circuitCode, mode};
   }
-  else
-  {
-    Serial.print("Error code: ");
-    Serial.println(httpResponseCode);
-    return 0;
-  }
+
+  Serial.println(payloadString);
+  Serial.println(topicString);
 }
 
 void setup()
@@ -154,13 +159,56 @@ void setup()
   }
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   WiFi.setHostname("hydrogarden");
-
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(30);
   }
   Serial.println("Connected to WiFi");
+
+  
+
+  
 };
+
+
+ 
+
+void mqttReconnect(){
+  while (!mqttClient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESPClient-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    mqttClient.setServer(brokerUrl, brokerPort);
+    mqttClient.setCallback(mqttCallback);
+    mqttClient.setBufferSize(2048);
+
+    if (mqttClient.connect(clientId.c_str(),"arduino", "arduino")) {
+      Serial.printf("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort);
+      mqttClient.subscribe("toDevice", 1);
+
+      mqttClient.publish("toServer","{\"commandName\":\"RequestCircuitStateRefresh\"}");
+      
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+}
+}
+
+void wifiReconnect(){
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setHostname("hydrogarden");
+  Serial.println("Attempting wifi reconnection");
+  while(WiFi.status() != WL_CONNECTED){
+      Serial.print(".");
+  }
+  Serial.println();
+}
 
 void tokeniseString(char *input, char **tokens)
 {
@@ -251,22 +299,21 @@ GeneratedTask *tryGettingTaskFromSerial()
 
 void loop()
 {
+  mqttClient.loop();
+  if(!wifiClient.connected()){
+    wifiReconnect();
+  }
+
+  if(!mqttClient.connected()){
+    mqttReconnect();
+  }
   GeneratedTask *taskFromHttp = 0;
 
   GeneratedTask *taskFromSerial = 0;
   GeneratedTask *taskToPerform = 0;
 
   taskFromSerial = tryGettingTaskFromSerial();
-  if (taskFromSerial == 0)
-  {
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      Serial.println("WiFi not connected");
-      return;
-    }
 
-    taskFromHttp = tryGettingTaskFromHttp();
-  }
 
   taskToPerform = taskFromHttp ? taskFromHttp : taskFromSerial;
 
