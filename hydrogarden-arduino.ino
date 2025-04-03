@@ -98,13 +98,24 @@ void writeState(int circuitCode, bool state)
   EEPROM.commit();
 }
 
-void printState()
+void printState(Level level)
 {
+  char buf[1024];
   for (int i = 1; i <= NUMBER_OF_CIRCUITS; i++)
   {
     int pin = pinFromCircuitCode(i);
-    Serial.println("Circuit " + String(i) + ": " + readState(i));
+    char pinStr[8];
+    char stateStr[1];
+    itoa(pin,pinStr,10);
+    itoa(readState(i),stateStr,10);
+    const char* lineTemplate = "Circuit %s:%s ";
+    const char* line = formatString(lineTemplate, pinStr, stateStr).c_str();
+    strcat(buf,line);
   }
+
+  log(buf,level);
+
+
 }
 
 void mqttCallback(const char* topic, byte* payload, unsigned int length) {
@@ -120,11 +131,9 @@ void mqttCallback(const char* topic, byte* payload, unsigned int length) {
   if(commandName == "ChangeSingleCircuitStateRequest") {
     int circuitCode = doc["circuitId"];
     bool newState = doc["newState"];
-    Serial.println(circuitCode);
-    Serial.println(newState);
 
     toggleCircuit(circuitCode, newState);
-    printState();
+    printState(DEBUG);
 
   } else if(commandName == "ChangeMultipleCircuitStateRequest") {
     JsonArray requests = doc["requests"];
@@ -132,16 +141,12 @@ void mqttCallback(const char* topic, byte* payload, unsigned int length) {
     for(JsonVariant request: requests){
       int circuitCode = request["circuitId"];
       bool newState = request["newState"];
-      Serial.println(circuitCode);
-      Serial.println(newState);
 
       toggleCircuit(circuitCode, newState);
-      printState();
+      printState(DEBUG);
     }
   }
 
-  Serial.println(payloadString);
-  Serial.println(topicString);
 }
 
 void setup()
@@ -149,7 +154,7 @@ void setup()
   Serial.begin(9600);
   while (!Serial)
     ;
-  Serial.println("Initialising...");
+  info("Initialising...");
   EEPROM.begin(512);
   for (int circuitCode = 1; circuitCode <= NUMBER_OF_CIRCUITS; circuitCode++)
   {
@@ -163,7 +168,7 @@ void setup()
   {
     delay(30);
   }
-  Serial.println("Connected to WiFi");
+  info("Connected to WiFi");
 
   
 
@@ -175,7 +180,7 @@ void setup()
 
 void mqttReconnect(){
   while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
+    info("Attempting MQTT connection...");
     // Create a random client ID
     String clientId = "ESPClient-";
     clientId += String(random(0xffff), HEX);
@@ -185,15 +190,14 @@ void mqttReconnect(){
     mqttClient.setBufferSize(2048);
 
     if (mqttClient.connect(clientId.c_str(),"arduino", "arduino")) {
-      Serial.printf("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort);
+      info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort));
       mqttClient.subscribe("toDevice", 1);
-
+      String asd;
       mqttClient.publish("toServer","{\"commandName\":\"RequestCircuitStateRefresh\"}");
       
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
+      MqttConnectionStatus status = static_cast<MqttConnectionStatus>(mqttClient.state());
+      warn(formatString("Failed to connect to mqtt client, reason: %s", mqttStatusToString(status)));
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -203,99 +207,115 @@ void mqttReconnect(){
 void wifiReconnect(){
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   WiFi.setHostname("hydrogarden");
-  Serial.println("Attempting wifi reconnection");
+  info("Attempting wifi reconnection");
   while(WiFi.status() != WL_CONNECTED){
       Serial.print(".");
   }
-  Serial.println();
+  info("Connected to wifi");
 }
 
-void tokeniseString(char *input, char **tokens)
-{
-  char *token = strtok(input, " ");
-  int i = 0;
-  while (token != NULL)
-  {
-    tokens[i] = token;
-    token = strtok(NULL, " ");
-    i++;
-  }
+String formatString(const char *format, ...) {
+  static const u_int BUF_LEN=2048; 
+  char buf[BUF_LEN]; 
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buf, sizeof(buf), format, args);
+  va_end(args);
+  return String(buf);
 }
 
-void readCommand()
-{
-  int i = 0;
-  while (Serial.available())
-  {
-    commandBuffer[i] = Serial.readStringUntil(' ');
-    i++;
-  }
-}
+enum MqttConnectionStatus {
+  CONNECTION_TIMEOUT = -4,
+  CONNECTION_LOST = -3,
+  CONNECT_FAILED = -2,
+  DISCONNECTED = -1,
+  CONNECTED = 0,
+  CONNECT_BAD_PROTOCOL = 1,
+  CONNECT_BAD_CLIENT_ID = 2,
+  CONNECT_UNAVAILABLE = 3,
+  CONNECT_BAD_CREDENTIALS = 4,
+  CONNECT_UNAUTHORIZED = 5
+};
 
-GeneratedTask *parseCommand()
-{
-  int circuitCode = -1;
-  bool mode = false;
-  if (commandBuffer[0] == "toggle")
-  {
-    circuitCode = commandBuffer[1].toInt();
-    mode = !readState(circuitCode);
-    Serial.println("Toggled circuit " + String(circuitCode) + " to " + String(mode));
-    return new GeneratedTask{circuitCode, mode};
-  }
-  else if (commandBuffer[0] == "set")
-  {
-    circuitCode = commandBuffer[1].toInt();
-    mode = commandBuffer[2].toInt();
-    toggleCircuit(circuitCode, mode);
-    Serial.println("Set circuit " + String(circuitCode) + " to " + String(mode));
-  }
-  else if (commandBuffer[0] == "get")
-  {
-    int circuitCode = commandBuffer[1].toInt();
-    bool state = readState(circuitCode);
-    Serial.println("Circuit " + String(circuitCode) + " is " + String(state));
-  }
-  else if (commandBuffer[0] == "getall")
-  {
-    for (int i = 1; i <= NUMBER_OF_CIRCUITS; i++)
-    {
-      Serial.println("Circuit " + String(i) + " is " + String(readState(i)));
-    }
-  }
-  else if (commandBuffer[0] == "help")
-  {
-    Serial.println("Commands:");
-    Serial.println("toggle <circuitCode>");
-    Serial.println("set <circuitCode> <mode>");
-    Serial.println("get <circuitCode>");
-    Serial.println("getall");
-    Serial.println("help");
-  }
-  else
-  {
-    Serial.println("Invalid command");
-  }
-
-  if (circuitCode != -1)
-  {
-    return new GeneratedTask{circuitCode, mode};
-  }
-  else
-  {
-    return 0;
+String mqttStatusToString(MqttConnectionStatus status) {
+  switch (status) {
+      case CONNECTION_TIMEOUT: return "MQTT_CONNECTION_TIMEOUT - the server didn't respond within the keepalive time";
+      case CONNECTION_LOST: return "MQTT_CONNECTION_LOST - the network connection was broken";
+      case CONNECT_FAILED: return "MQTT_CONNECT_FAILED - the network connection failed";
+      case DISCONNECTED: return "MQTT_DISCONNECTED - the client is disconnected cleanly";
+      case CONNECTED: return "MQTT_CONNECTED - the client is connected";
+      case CONNECT_BAD_PROTOCOL: return "MQTT_CONNECT_BAD_PROTOCOL - the server doesn't support the requested version of MQTT";
+      case CONNECT_BAD_CLIENT_ID: return "MQTT_CONNECT_BAD_CLIENT_ID - the server rejected the client identifier";
+      case CONNECT_UNAVAILABLE: return "MQTT_CONNECT_UNAVAILABLE - the server was unable to accept the connection";
+      case CONNECT_BAD_CREDENTIALS: return "MQTT_CONNECT_BAD_CREDENTIALS - the username/password were rejected";
+      case CONNECT_UNAUTHORIZED: return "MQTT_CONNECT_UNAUTHORIZED - the client was not authorized to connect";
+      default: return "Unknown MQTT status";
   }
 }
 
-GeneratedTask *tryGettingTaskFromSerial()
-{
-  if (Serial && Serial.available() > 0)
-  {
-    readCommand();
-    return parseCommand();
+enum Level {
+  TRACE, DEBUG, INFO, WARN, ERROR, FATAL
+};
+
+String levelToString(Level level){
+  switch(level){
+    case TRACE:
+      return "TRACE";
+    case DEBUG:
+      return "DEBUG";
+    case INFO:
+      return "INFO";
+    case WARN:
+      return "WARN";
+    case ERROR:
+      return "ERROR";
+    case FATAL:
+      return "FATAL";
   }
-  return 0;
+  return "UNKNOWN";
 }
+
+void log(String message, Level level) {
+
+  const char* log_template = "Device says %s: %s";
+  if(Serial.available()){
+    Serial.printf(log_template,levelToString(level),message);
+    Serial.println();
+  }
+
+  if(mqttClient.connected()){
+    static const size_t MAX_BUF_LEN = 200;
+    const char* jsonTemplate = "{\"commandName\":\"LogMessagePayload\", \"timestamp\":\"null\", \"level\":\"%s\", \"message\":\"%s\"}";
+    char json[MAX_BUF_LEN];
+    snprintf(json,MAX_BUF_LEN,jsonTemplate,levelToString(level),message.c_str());
+    mqttClient.publish("toServer",json);
+  }
+}
+
+void trace(String message){
+  return log(message,TRACE);
+}
+
+void debug(String message){
+  return log(message,DEBUG);
+}
+
+void info(String message){
+  return log(message,INFO);
+}
+
+void warn(String message){
+  return log(message,WARN);
+}
+
+void error(String message){
+  return log(message,ERROR);
+}
+
+void fatal(String message){
+  return log(message,FATAL);
+}
+
 
 void loop()
 {
@@ -307,42 +327,4 @@ void loop()
   if(!mqttClient.connected()){
     mqttReconnect();
   }
-  GeneratedTask *taskFromHttp = 0;
-
-  GeneratedTask *taskFromSerial = 0;
-  GeneratedTask *taskToPerform = 0;
-
-  taskFromSerial = tryGettingTaskFromSerial();
-
-
-  taskToPerform = taskFromHttp ? taskFromHttp : taskFromSerial;
-
-  if (taskToPerform == 0)
-  {
-    // Serial.println("No task");
-  }
-  else
-  {
-    toggleCircuit(taskToPerform->circuitCode, taskToPerform->mode);
-    if (taskToPerform->mode)
-    {
-      Serial.println("Task: Circuit " + String(taskToPerform->circuitCode) + " on");
-    }
-    else
-    {
-      Serial.println("Task: Circuit " + String(taskToPerform->circuitCode) + " off");
-    }
-    printState();
-  }
-
-  if (taskFromHttp != 0)
-  {
-    delete taskFromHttp;
-  }
-  if (taskFromSerial != 0)
-  {
-    delete taskFromSerial;
-  }
-
-  delay(100);
 }
