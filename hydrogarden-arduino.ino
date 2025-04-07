@@ -13,6 +13,60 @@ struct GeneratedTask
   bool mode; // true = on, false = off
 };
 
+namespace Device {
+
+  enum MqttConnectionStatus {
+    CONNECTION_TIMEOUT = -4,
+    CONNECTION_LOST = -3,
+    CONNECT_FAILED = -2,
+    DISCONNECTED = -1,
+    CONNECTED = 0,
+    CONNECT_BAD_PROTOCOL = 1,
+    CONNECT_BAD_CLIENT_ID = 2,
+    CONNECT_UNAVAILABLE = 3,
+    CONNECT_BAD_CREDENTIALS = 4,
+    CONNECT_UNAUTHORIZED = 5
+  };
+  
+  String mqttStatusToString(MqttConnectionStatus status) {
+    switch (status) {
+        case CONNECTION_TIMEOUT: return "MQTT_CONNECTION_TIMEOUT - the server didn't respond within the keepalive time";
+        case CONNECTION_LOST: return "MQTT_CONNECTION_LOST - the network connection was broken";
+        case CONNECT_FAILED: return "MQTT_CONNECT_FAILED - the network connection failed";
+        case DISCONNECTED: return "MQTT_DISCONNECTED - the client is disconnected cleanly";
+        case CONNECTED: return "MQTT_CONNECTED - the client is connected";
+        case CONNECT_BAD_PROTOCOL: return "MQTT_CONNECT_BAD_PROTOCOL - the server doesn't support the requested version of MQTT";
+        case CONNECT_BAD_CLIENT_ID: return "MQTT_CONNECT_BAD_CLIENT_ID - the server rejected the client identifier";
+        case CONNECT_UNAVAILABLE: return "MQTT_CONNECT_UNAVAILABLE - the server was unable to accept the connection";
+        case CONNECT_BAD_CREDENTIALS: return "MQTT_CONNECT_BAD_CREDENTIALS - the username/password were rejected";
+        case CONNECT_UNAUTHORIZED: return "MQTT_CONNECT_UNAUTHORIZED - the client was not authorized to connect";
+        default: return "Unknown MQTT status";
+    }
+  }
+
+  enum Level {
+    TRACE, DEBUG, INFO, WARN, ERROR, FATAL
+  };
+  
+  String levelToString(Level level){
+    switch(level){
+      case TRACE:
+        return "TRACE";
+      case DEBUG:
+        return "DEBUG";
+      case INFO:
+        return "INFO";
+      case WARN:
+        return "WARN";
+      case ERROR:
+        return "ERROR";
+      case FATAL:
+        return "FATAL";
+    }
+    return "UNKNOWN";
+  }
+
+
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -100,26 +154,28 @@ void writeState(int circuitCode, bool state)
 
 void printState(Level level)
 {
-  char buf[1024];
+  String buf = "";  
   for (int i = 1; i <= NUMBER_OF_CIRCUITS; i++)
   {
     int pin = pinFromCircuitCode(i);
     char pinStr[8];
-    char stateStr[1];
-    itoa(pin,pinStr,10);
-    itoa(readState(i),stateStr,10);
-    const char* lineTemplate = "Circuit %s:%s ";
-    const char* line = formatString(lineTemplate, pinStr, stateStr).c_str();
-    strcat(buf,line);
+    char codeStr[8];
+    char stateStr[2];  
+    itoa(pin, pinStr, 10);
+    itoa(i, codeStr, 10);
+    itoa(readState(i), stateStr, 10);
+
+    const char* lineTemplate = "Circuit %s (pin %s):%s ";
+    String line = formatString(lineTemplate, codeStr,pinStr, stateStr);
+    
+    buf.concat(line);  
   }
 
-  log(buf,level);
-
-
+  log(buf.c_str(), level);  
 }
 
+
 void mqttCallback(const char* topic, byte* payload, unsigned int length) {
-  Serial.println("asdasd");
   String payloadString(payload, length);
   String topicString(topic);
 
@@ -127,7 +183,6 @@ void mqttCallback(const char* topic, byte* payload, unsigned int length) {
 
   deserializeJson(doc,payloadString);
   const String commandName = doc["commandName"];
-  Serial.println(commandName);
   if(commandName == "ChangeSingleCircuitStateRequest") {
     int circuitCode = doc["circuitId"];
     bool newState = doc["newState"];
@@ -149,31 +204,7 @@ void mqttCallback(const char* topic, byte* payload, unsigned int length) {
 
 }
 
-void setup()
-{
-  Serial.begin(9600);
-  while (!Serial)
-    ;
-  info("Initialising...");
-  EEPROM.begin(512);
-  for (int circuitCode = 1; circuitCode <= NUMBER_OF_CIRCUITS; circuitCode++)
-  {
-    int pin = pinFromCircuitCode(circuitCode);
-    pinMode(pin, OUTPUT);
-    digitalWrite(pin, readState(circuitCode));
-  }
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  WiFi.setHostname("hydrogarden");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(30);
-  }
-  info("Connected to WiFi");
 
-  
-
-  
-};
 
 
  
@@ -190,14 +221,13 @@ void mqttReconnect(){
     mqttClient.setBufferSize(2048);
 
     if (mqttClient.connect(clientId.c_str(),"arduino", "arduino")) {
-      info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort));
+      info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort).c_str());
       mqttClient.subscribe("toDevice", 1);
-      String asd;
-      mqttClient.publish("toServer","{\"commandName\":\"RequestCircuitStateRefresh\"}");
+      mqttClient.publish("CircuitStateRefreshDeviceRequestQueue","{\"commandName\":\"RequestCircuitStateRefresh\"}");
       
     } else {
-      MqttConnectionStatus status = static_cast<MqttConnectionStatus>(mqttClient.state());
-      warn(formatString("Failed to connect to mqtt client, reason: %s", mqttStatusToString(status)));
+      Device::MqttConnectionStatus status = static_cast<Device::MqttConnectionStatus>(mqttClient.state());
+      warn(formatString("Failed to connect to mqtt client, reason: %s", Device::mqttStatusToString(status)).c_str());
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -214,117 +244,96 @@ void wifiReconnect(){
   info("Connected to wifi");
 }
 
-String formatString(const char *format, ...) {
+const String formatString(const char *format, ...) {
   static const u_int BUF_LEN=2048; 
   char buf[BUF_LEN]; 
   va_list args;
   va_start(args, format);
-  vsnprintf(buf, sizeof(buf), format, args);
+  vsnprintf(buf, BUF_LEN, format, args);
   va_end(args);
   return String(buf);
 }
 
-enum MqttConnectionStatus {
-  CONNECTION_TIMEOUT = -4,
-  CONNECTION_LOST = -3,
-  CONNECT_FAILED = -2,
-  DISCONNECTED = -1,
-  CONNECTED = 0,
-  CONNECT_BAD_PROTOCOL = 1,
-  CONNECT_BAD_CLIENT_ID = 2,
-  CONNECT_UNAVAILABLE = 3,
-  CONNECT_BAD_CREDENTIALS = 4,
-  CONNECT_UNAUTHORIZED = 5
-};
 
-String mqttStatusToString(MqttConnectionStatus status) {
-  switch (status) {
-      case CONNECTION_TIMEOUT: return "MQTT_CONNECTION_TIMEOUT - the server didn't respond within the keepalive time";
-      case CONNECTION_LOST: return "MQTT_CONNECTION_LOST - the network connection was broken";
-      case CONNECT_FAILED: return "MQTT_CONNECT_FAILED - the network connection failed";
-      case DISCONNECTED: return "MQTT_DISCONNECTED - the client is disconnected cleanly";
-      case CONNECTED: return "MQTT_CONNECTED - the client is connected";
-      case CONNECT_BAD_PROTOCOL: return "MQTT_CONNECT_BAD_PROTOCOL - the server doesn't support the requested version of MQTT";
-      case CONNECT_BAD_CLIENT_ID: return "MQTT_CONNECT_BAD_CLIENT_ID - the server rejected the client identifier";
-      case CONNECT_UNAVAILABLE: return "MQTT_CONNECT_UNAVAILABLE - the server was unable to accept the connection";
-      case CONNECT_BAD_CREDENTIALS: return "MQTT_CONNECT_BAD_CREDENTIALS - the username/password were rejected";
-      case CONNECT_UNAUTHORIZED: return "MQTT_CONNECT_UNAUTHORIZED - the client was not authorized to connect";
-      default: return "Unknown MQTT status";
-  }
-}
 
-enum Level {
-  TRACE, DEBUG, INFO, WARN, ERROR, FATAL
-};
 
-String levelToString(Level level){
-  switch(level){
-    case TRACE:
-      return "TRACE";
-    case DEBUG:
-      return "DEBUG";
-    case INFO:
-      return "INFO";
-    case WARN:
-      return "WARN";
-    case ERROR:
-      return "ERROR";
-    case FATAL:
-      return "FATAL";
-  }
-  return "UNKNOWN";
-}
 
-void log(String message, Level level) {
+void log(const char* message, Level level) {
 
   const char* log_template = "Device says %s: %s";
-  if(Serial.available()){
+  if(Serial.availableForWrite()){
     Serial.printf(log_template,levelToString(level),message);
     Serial.println();
   }
 
   if(mqttClient.connected()){
-    static const size_t MAX_BUF_LEN = 200;
-    const char* jsonTemplate = "{\"commandName\":\"LogMessagePayload\", \"timestamp\":\"null\", \"level\":\"%s\", \"message\":\"%s\"}";
+    static const size_t MAX_BUF_LEN = 1024;
+    const char* jsonTemplate = "{\"commandName\":\"LogMessagePayload\", \"timestamp\":null, \"level\":\"%s\", \"message\":\"%s\"}";
     char json[MAX_BUF_LEN];
-    snprintf(json,MAX_BUF_LEN,jsonTemplate,levelToString(level),message.c_str());
-    mqttClient.publish("toServer",json);
+    snprintf(json,MAX_BUF_LEN,jsonTemplate,levelToString(level),message);
+    mqttClient.publish("LogEventDeviceRequestQueue",json);
   }
 }
 
-void trace(String message){
+void trace(const char* message){
   return log(message,TRACE);
 }
 
-void debug(String message){
+void debug(const char* message){
   return log(message,DEBUG);
 }
 
-void info(String message){
+void info(const char* message){
   return log(message,INFO);
 }
 
-void warn(String message){
+void warn(const char* message){
   return log(message,WARN);
 }
 
-void error(String message){
+void error(const char* message){
   return log(message,ERROR);
 }
 
-void fatal(String message){
+void fatal(const char* message){
   return log(message,FATAL);
 }
 
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  while (!Serial)
+    ;
+  Device::info("Initialising...");
+  EEPROM.begin(512);
+  for (int circuitCode = 1; circuitCode <= NUMBER_OF_CIRCUITS; circuitCode++)
+  {
+    int pin = Device::pinFromCircuitCode(circuitCode);
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, Device::readState(circuitCode));
+  }
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setHostname("hydrogarden");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(30);
+  }
+  Device::info("Connected to WiFi");
+
+
+  
+};
 
 void loop()
 {
-  mqttClient.loop();
-  if(!wifiClient.connected()){
-    wifiReconnect();
+  Device::mqttClient.loop();
+  if(!Device::wifiClient.connected()){
+    Device::wifiReconnect();
   }
 
-  if(!mqttClient.connected()){
-    mqttReconnect();
+  if(!Device::mqttClient.connected()){
+    Device::mqttReconnect();
   }
 }
