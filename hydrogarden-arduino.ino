@@ -220,7 +220,7 @@ void mqttReconnect(){
     mqttClient.setServer(brokerUrl, brokerPort);
     mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(2048);
-    if (mqttClient.connect(clientId.c_str(),MQTT_USER, MQTT_PASSWORD)) {
+    if (mqttClient.connect(clientId.c_str(),MQTT_USER.c_str(), MQTT_PASSWORD.c_str())) {
       info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort).c_str());
       mqttClient.subscribe("toDevice", 1);
       mqttClient.publish("CircuitStateRefreshDeviceRequestQueue","{\"commandName\":\"RequestCircuitStateRefresh\"}");
@@ -309,6 +309,7 @@ void disableAllCircuits(){
 
 void setup()
 {
+  setCpuFrequencyMhz(160);
   Serial.begin(9600);
   while (!Serial)
     ;
