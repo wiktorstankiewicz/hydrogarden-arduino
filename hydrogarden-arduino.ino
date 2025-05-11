@@ -220,7 +220,7 @@ void mqttReconnect(){
     mqttClient.setServer(brokerUrl, brokerPort);
     mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(2048);
-    if (mqttClient.connect(clientId.c_str(),"arduino", "arduino")) {
+    if (mqttClient.connect(clientId.c_str(),MQTT_USER, MQTT_PASSWORD)) {
       info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort).c_str());
       mqttClient.subscribe("toDevice", 1);
       mqttClient.publish("CircuitStateRefreshDeviceRequestQueue","{\"commandName\":\"RequestCircuitStateRefresh\"}");
