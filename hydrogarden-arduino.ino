@@ -74,7 +74,8 @@ PubSubClient mqttClient(wifiClient);
 const String API_URL = "http://localhost:30437/api";
 String commandBuffer[10];
 
-const char* brokerUrl = "192.168.0.102";
+//const char* brokerUrl = "192.168.0.102";
+const char* brokerUrl = "130.61.230.127";
 const u_int16_t brokerPort = 1883;
 
 int pinFromCircuitCode(int circuitCode)
@@ -219,7 +220,6 @@ void mqttReconnect(){
     mqttClient.setServer(brokerUrl, brokerPort);
     mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(2048);
-
     if (mqttClient.connect(clientId.c_str(),"arduino", "arduino")) {
       info(formatString("Connected to MQTT broker at %s:%u", brokerUrl, brokerPort).c_str());
       mqttClient.subscribe("toDevice", 1);
@@ -301,6 +301,12 @@ void fatal(const char* message){
 
 }
 
+void disableAllCircuits(){
+  for(int i =1; i<=8; i++){
+    Device::closeCircuit(i);
+  }
+}
+
 void setup()
 {
   Serial.begin(9600);
@@ -312,7 +318,7 @@ void setup()
   {
     int pin = Device::pinFromCircuitCode(circuitCode);
     pinMode(pin, OUTPUT);
-    digitalWrite(pin, Device::readState(circuitCode));
+    digitalWrite(pin, LOW);
   }
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   WiFi.setHostname("hydrogarden");
@@ -321,19 +327,18 @@ void setup()
     delay(30);
   }
   Device::info("Connected to WiFi");
-
-
-  
 };
 
 void loop()
 {
   Device::mqttClient.loop();
   if(!Device::wifiClient.connected()){
+    disableAllCircuits();
     Device::wifiReconnect();
   }
 
   if(!Device::mqttClient.connected()){
+    disableAllCircuits();
     Device::mqttReconnect();
   }
 }
